@@ -46,6 +46,42 @@
     .status {
       color: #526078;
     }
+    .filters {
+      display: grid;
+      grid-template-columns: minmax(12rem, 1fr) minmax(12rem, 1fr);
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .field {
+      display: grid;
+      gap: 0.35rem;
+      color: #526078;
+      font-size: 0.85rem;
+      font-weight: 700;
+    }
+    .field input,
+    .field select {
+      width: 100%;
+      min-height: 2.75rem;
+      box-sizing: border-box;
+      border: 1px solid #cbd5e1;
+      border-radius: 0.45rem;
+      background: #fff;
+      color: #172033;
+      font: inherit;
+      font-weight: 400;
+    }
+    .field input {
+      padding: 0.65rem 0.75rem;
+    }
+    .field select {
+      padding: 0.65rem 2.25rem 0.65rem 0.75rem;
+    }
+    .field input:focus,
+    .field select:focus {
+      outline: 3px solid rgb(37 99 235 / 20%);
+      border-color: #2563eb;
+    }
     .table-wrap {
       overflow-x: auto;
       border: 1px solid #dbe2ef;
@@ -68,7 +104,7 @@
       letter-spacing: 0.04em;
       text-transform: uppercase;
     }
-    td:last-child, th:last-child {
+    td.number, th.number {
       text-align: right;
     }
     tbody tr:last-child td {
@@ -78,6 +114,18 @@
       color: #123b7a;
       font-variant-numeric: tabular-nums;
       font-weight: 700;
+    }
+    .count {
+      color: #526078;
+      font-variant-numeric: tabular-nums;
+    }
+    @media (max-width: 40rem) {
+      body {
+        padding: 2rem 1rem;
+      }
+      .filters {
+        grid-template-columns: 1fr;
+      }
     }
     footer {
       margin-top: 2rem;
@@ -94,12 +142,26 @@
       <p class="rule">Only sales of $10,000 or more are included.</p>
     </header>
     <p id="status" class="status">Loading sale data...</p>
+    <div class="filters" aria-label="Filter sale prices">
+      <label class="field" for="city-search">
+        Search city
+        <input id="city-search" type="search" placeholder="Try Gainesville" autocomplete="off">
+      </label>
+      <label class="field" for="campus-filter">
+        Campus
+        <select id="campus-filter">
+          <option value="">All campuses</option>
+        </select>
+      </label>
+    </div>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
             <th scope="col">City</th>
-            <th scope="col">Median sale price</th>
+            <th scope="col">Campus</th>
+            <th scope="col" class="number">Qualifying sales</th>
+            <th scope="col" class="number">Median sale price</th>
           </tr>
         </thead>
         <tbody id="results"></tbody>
@@ -114,6 +176,10 @@
     const currency = new Intl.NumberFormat("en-US", {
       style: "currency",
       currency: "USD",
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
+    });
+    const integer = new Intl.NumberFormat("en-US", {
       maximumFractionDigits: 0
     });
 
@@ -165,33 +231,85 @@
         : sorted[middle];
     }
 
+    let citySummaries = [];
+
+    function renderRows() {
+      const cityQuery = document.querySelector("#city-search").value.trim().toLocaleLowerCase();
+      const campusQuery = document.querySelector("#campus-filter").value;
+      const results = document.querySelector("#results");
+      results.replaceChildren();
+
+      const visibleSummaries = citySummaries.filter(({ city, campus }) =>
+        (!cityQuery || city.toLocaleLowerCase().includes(cityQuery)) &&
+        (!campusQuery || campus === campusQuery)
+      );
+
+      visibleSummaries.forEach(({ city, campus, prices }) => {
+        const row = document.createElement("tr");
+
+        const cityCell = document.createElement("td");
+        cityCell.textContent = city;
+
+        const campusCell = document.createElement("td");
+        campusCell.textContent = campus;
+
+        const countCell = document.createElement("td");
+        countCell.className = "count number";
+        countCell.textContent = integer.format(prices.length);
+
+        const priceCell = document.createElement("td");
+        priceCell.className = "price number";
+        priceCell.textContent = currency.format(Math.round(median(prices)));
+
+        row.append(cityCell, campusCell, countCell, priceCell);
+        results.append(row);
+      });
+
+      const qualifyingSales = visibleSummaries.reduce((total, summary) => total + summary.prices.length, 0);
+      document.querySelector("#status").textContent =
+        visibleSummaries.length === citySummaries.length
+          ? `${citySummaries.length} cities · ${integer.format(qualifyingSales)} qualifying sales`
+          : `${visibleSummaries.length} of ${citySummaries.length} cities · ${integer.format(qualifyingSales)} qualifying sales`;
+    }
+
     function render(data) {
       const rows = parseCsv(data);
       const headers = rows.shift();
       const cityIndex = headers.indexOf("city");
       const priceIndex = headers.indexOf("sale_price");
-      const pricesByCity = new Map();
+      const campusIndex = headers.indexOf("university");
+      const summariesByCity = new Map();
 
       rows.forEach((row) => {
         const price = Number(row[priceIndex]);
         if (row[cityIndex] && Number.isFinite(price) && price >= 10000) {
-          const prices = pricesByCity.get(row[cityIndex]) || [];
-          prices.push(price);
-          pricesByCity.set(row[cityIndex], prices);
+          const campus = row[campusIndex];
+          const summary = summariesByCity.get(row[cityIndex]) || {
+            city: row[cityIndex],
+            campus,
+            prices: []
+          };
+          summary.prices.push(price);
+          summariesByCity.set(row[cityIndex], summary);
         }
       });
 
-      const results = document.querySelector("#results");
-      [...pricesByCity.entries()]
-        .sort(([cityA], [cityB]) => cityA.localeCompare(cityB))
-        .forEach(([city, prices]) => {
-          const row = document.createElement("tr");
-          row.innerHTML = `<td>${city}</td><td class="price">${currency.format(median(prices))}</td>`;
-          results.append(row);
+      citySummaries = [...summariesByCity.values()]
+        .sort((summaryA, summaryB) => summaryA.city.localeCompare(summaryB.city));
+
+      const campusFilter = document.querySelector("#campus-filter");
+      [...new Set(citySummaries.map(({ campus }) => campus))]
+        .sort((campusA, campusB) => campusA.localeCompare(campusB))
+        .forEach((campus) => {
+          const option = document.createElement("option");
+          option.value = campus;
+          option.textContent = campus;
+          campusFilter.append(option);
         });
 
-      document.querySelector("#status").textContent =
-        `${pricesByCity.size} cities · ${[...pricesByCity.values()].reduce((total, prices) => total + prices.length, 0).toLocaleString()} qualifying sales`;
+      document.querySelector("#city-search").addEventListener("input", renderRows);
+      campusFilter.addEventListener("change", renderRows);
+      renderRows();
     }
 
     fetch(dataUrl)
